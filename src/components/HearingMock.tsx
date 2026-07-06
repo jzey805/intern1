@@ -568,6 +568,12 @@ export default function HearingMock() {
                 <Play size={16} />
               </button>
             </div>
+
+            <div className="mt-4 text-[10px] text-gray-400 text-center leading-relaxed max-w-2xl mx-auto italic">
+              {isZh 
+                ? '🔒 提示：练习产生的全部对话仅在浏览器本地缓存。本模块不构成法律代理、执业咨询或官方学术建议，仅用作口语演练及博弈逻辑参考。'
+                : '🔒 Note: All conversation remains purely in your local browser state. This tool is for oral practice purposes and does not constitute formal legal advising.'}
+            </div>
           </div>
         </div>
       ) : showScorecard ? (
@@ -661,6 +667,21 @@ export default function HearingMock() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                </div>
+
+                {/* Legal Disclaimer Box (Risk 2 Solution) */}
+                <div className="bg-red-50/50 border border-red-200/50 p-4 rounded-2xl mb-6 text-xs text-red-950 flex gap-2.5 items-start">
+                  <span className="p-1.5 bg-red-100 text-red-700 rounded-lg shrink-0 text-xs">🛡️</span>
+                  <div>
+                    <h5 className="font-extrabold text-red-900 uppercase tracking-wide text-[11px] mb-1">
+                      {isZh ? '⚠️ 法律与学术维权免责声明 (LEGAL DISCLAIMER)' : '⚠️ Legal & Academic Disclaimer'}
+                    </h5>
+                    <p className="leading-relaxed text-red-800 text-[10px]">
+                      {isZh 
+                        ? '本模块仅为拟真口语训练与策略表达练习沙盘。AI 评委给出的所有分数、合规缺陷诊断、优化意见及推荐话术仅供沟通练习参考，绝对不构成任何正式的学术指导、移民建议、律师咨询或执业法律代理意见。本平台不对以此作为正式抗诉依据所产生的任何第三方裁决、处罚或学籍状态影响承担任何学术与法律责任。学子如有切实的法律、维权、移民指控危机，请务必咨询持有执照的注册律师或各大学官方学生会 (Student Union) 的 Advocacy 服务！' 
+                        : 'This interactive simulation module is for oral presentation training and negotiation rehearsal purposes only. The metrics, feedback scores, optimized scripts, and commentary provided by the AI opponent or evaluator are solely for practice references, and do NOT constitute legal advice, migration representation, or official academic counsel. The platform assumes no legal or academic liability for real-world outcomes based on this tool. Always consult a certified legal professional or your Student Union Advocates for formal help.'}
+                    </p>
                   </div>
                 </div>
 
@@ -849,6 +870,70 @@ export default function HearingMock() {
 
               {/* Input section: voice/manual */}
               <div className="border-t border-gray-100 pt-4 flex flex-col gap-3">
+                
+                {/* Quick Preset Arguments for Live Demo/Bypass (Risk 1 Solution) */}
+                <div className="px-3.5 py-2.5 bg-amber-50/50 border border-amber-100/50 rounded-2xl flex flex-col gap-2">
+                  <span className="text-[10px] font-black text-amber-800 tracking-wider flex items-center gap-1.5 uppercase font-sans">
+                    <Sparkles size={12} className="text-[#ff5a3c]" />
+                    ⚡ 演示一键备用词 (Live Presentation Backup Templates — Avoid Mic/Latency Issues)
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {activeScenario === 'academic' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("I did not use generative AI. The similarity rate is high only because I referenced standard laboratory protocols and common template definitions.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                        >
+                          📌 模板引用辩词 (Template Ref)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("My version history in Google Docs fully proves I drafted this essay from scratch over a three-week period. I can share the timeline logs.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                        >
+                          📌 历史痕迹自证 (Doc Logs Ref)
+                        </button>
+                      </>
+                    )}
+                    {activeScenario === 'bond' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("According to VCAT and RTBA guidelines, minor scuffs on a 5-year-old floor are fully acceptable. You cannot claim my entire $2,500 bond.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                        >
+                          📌 引用磨损法规 (Wear & Tear)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("The entry inspection report highlights that the kitchen was dusty when I moved in. I have photos confirming I left it cleaner.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                        >
+                          📌 引用状态报告 (Entry Report)
+                        </button>
+                      </>
+                    )}
+                    {activeScenario === 'fine' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("I was driving safely within limits until a heavy transport truck tailgated me dangerously, forcing me to temporarily speed up.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                        >
+                          📌 紧急避险抗诉 (Emergency Avoidance)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("The 40km/h school zone signpost was completely hidden by unpruned, overhanging branches of the street tree at that intersection.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                        >
+                          📌 路标遮挡抗辩 (Obscured Sign)
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
                 
                 {/* Voice support notice / trigger */}
                 <div className="flex items-center justify-between gap-2 flex-wrap">
