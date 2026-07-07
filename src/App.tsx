@@ -6,6 +6,8 @@ import EcosystemHub from './components/EcosystemHub';
 import HistoryView from './components/HistoryView';
 import LegalHubDemo from './components/LegalHubDemo';
 import HearingMock from './components/HearingMock';
+import ToastContainer from './components/ToastContainer';
+import { showToast } from './lib/toast';
 import { Mail, Shield, AlertTriangle, Compass, LogIn, LogOut, Clock, Scale, ListTodo, Mic } from 'lucide-react';
 
 import { initAuth, googleSignIn, consumeRedirectResult, logout } from './lib/firebase';
@@ -53,9 +55,9 @@ export default function App() {
         try {
           const d = JSON.parse(pending);
           await createGmailDraft(res.accessToken, d.recipient, d.subject, d.body);
-          alert('✅ 草稿已存进你的 Gmail！打开 Gmail 的「草稿」即可查看并发送。');
+          showToast('✅ 草稿已存进你的 Gmail！打开 Gmail 的「草稿」即可查看并发送。', 'success');
         } catch (e: any) {
-          alert('草稿创建失败：' + (e?.message || e));
+          showToast('草稿创建失败：' + (e?.message || e), 'error');
         }
       }
     });
@@ -112,6 +114,7 @@ export default function App() {
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-canvas font-sans text-body overflow-hidden pb-16 md:pb-0 md:pl-20 relative">
+      <ToastContainer />
 
       {/* Top App Bar */}
       <header className="bg-canvas/85 backdrop-blur-md border-b border-hairline flex flex-wrap items-center justify-between gap-y-2 px-4 md:px-6 py-3 md:py-3.5 z-20 sticky top-0 w-full">

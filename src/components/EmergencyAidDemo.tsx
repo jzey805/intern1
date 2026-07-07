@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Phone, MapPin, AlertCircle, Volume2, ShieldAlert, BookOpen, Sparkles, Copy, Check, HeartHandshake, ExternalLink, ArrowRight, ShieldCheck, CheckSquare, Square, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { APIProvider, Map as GoogleMap, AdvancedMarker, Pin } from '@vis.gl/react-google-maps';
+import RescueMap from './RescueMap';
 
 const API_KEY =
   process.env.GOOGLE_MAPS_PLATFORM_KEY ||
@@ -1145,49 +1146,17 @@ export default function EmergencyAidDemo() {
                   {/* 2.5 Nearby rescue points on Google Maps: in a real emergency the next question
                       after "call 000" is "where do I physically GO" — nearest police / ER / pharmacy. */}
                   <div className="bg-white border border-gray-150 rounded-3xl p-6 shadow-sm">
-                    <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+                    <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
                       <div className="flex items-center space-x-2">
                         <MapPin size={18} className="text-[#1d1d1f]" />
                         <h4 className="text-sm font-black text-gray-900 uppercase tracking-wide">附近救援点 · Google 地图</h4>
                       </div>
                       <span className="text-[10px] text-gray-400 font-bold">离你最近的实体求助点</span>
                     </div>
-                    <p className="text-[11px] text-gray-500 leading-relaxed mb-3">
-                      拨打 {content.emergency} 之后，下一个问题往往是"我人应该往哪走"。一键查看墨尔本离你最近的警局、急诊或 24 小时药房。
+                    <p className="text-[11px] text-gray-500 leading-relaxed mb-4">
+                      拨打 {content.emergency} 之后，下一个问题往往是 "我人应该往哪走"。我们对接了真实的 <strong>Places API 邻近位置检索</strong> 与 <strong>Routes API 实时路径规划</strong>，为您精准引路。
                     </p>
-                    <div className="flex flex-wrap gap-2 mb-3">
-                      {([
-                        ['👮 最近警局', 'police station near Melbourne VIC'],
-                        ['🏥 24h 急诊', 'hospital emergency department near Melbourne VIC'],
-                        ['💊 24h 药房', '24 hour pharmacy near Melbourne VIC'],
-                        ['🚉 安全岗亭', 'train station PSO Victoria Police near Melbourne VIC'],
-                      ] as [string, string][]).map(([label, q]) => (
-                        <button
-                          key={q}
-                          type="button"
-                          onClick={() => setRescueMapQuery(rescueMapQuery === q ? null : q)}
-                          className={`py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                            rescueMapQuery === q
-                              ? 'bg-red-600 text-white shadow-sm'
-                              : 'bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-150'
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                    {rescueMapQuery && (
-                      <div className="rounded-2xl overflow-hidden border border-gray-150 animate-in fade-in duration-300">
-                        <iframe
-                          title="rescue-map"
-                          src={`https://www.google.com/maps?q=${encodeURIComponent(rescueMapQuery)}&output=embed`}
-                          className="w-full"
-                          style={{ border: 0, height: 300 }}
-                          loading="lazy"
-                          referrerPolicy="no-referrer-when-downgrade"
-                        />
-                      </div>
-                    )}
+                    <RescueMap country={country} countryName={countryName} />
                   </div>
 
                   {/* 3. Copyman Cheat Sheet */}

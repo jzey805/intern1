@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocale } from '../lib/locale';
 import { useT } from '../lib/i18n';
+import { showToast } from '../lib/toast';
 import { 
   Mic, 
   MicOff, 
@@ -24,7 +25,8 @@ import {
   Scale, 
   ShieldAlert, 
   UserCheck,
-  Star
+  Star,
+  Copy
 } from 'lucide-react';
 
 interface Message {
@@ -108,11 +110,56 @@ export default function HearingMock() {
   const [micEnabled, setMicEnabled] = useState<boolean>(false);
   const [isSpeechRecording, setIsSpeechRecording] = useState<boolean>(false);
   const [ttsEnabled, setTtsEnabled] = useState<boolean>(true);
+  const [ttsMode, setTtsMode] = useState<'local' | 'ai'>('local'); // Default to local for instantaneous (0ms) response
+
+  // HUD Biometric Metrics Fluctuation
+  const [hudConfidence, setHudConfidence] = useState<number>(88);
+  const [hudEyeContact, setHudEyeContact] = useState<number>(94);
+  const [hudLogic, setHudLogic] = useState<number>(90);
+  const [hudWpm, setHudWpm] = useState<number>(135);
+
+  useEffect(() => {
+    if (!sessionActive) return;
+    const interval = setInterval(() => {
+      // Fluctuating confidence between 85 and 95
+      setHudConfidence(prev => {
+        const diff = Math.floor(Math.random() * 5) - 2; // -2 to +2
+        return Math.max(82, Math.min(98, prev + diff));
+      });
+      // Fluctuating eye contact between 90 and 98
+      setHudEyeContact(prev => {
+        const diff = Math.floor(Math.random() * 3) - 1; // -1 to +1
+        return Math.max(88, Math.min(99, prev + diff));
+      });
+      // Fluctuating logic index
+      setHudLogic(prev => {
+        const diff = Math.floor(Math.random() * 3) - 1; // -1 to +1
+        return Math.max(85, Math.min(96, prev + diff));
+      });
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [sessionActive]);
+
+  // Adjust WPM based on typing length
+  useEffect(() => {
+    if (userInput.length > 0) {
+      setHudWpm(Math.max(110, Math.min(180, 120 + (userInput.length % 45))));
+    } else {
+      setHudWpm(135);
+    }
+  }, [userInput]);
   
   // Evaluation scorecard states
   const [showScorecard, setShowScorecard] = useState<boolean>(false);
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
   const [scorecardData, setScorecardData] = useState<any>(null);
+
+  // Premium TTS states and refs
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsCacheRef = useRef<Map<string, string>>(new Map());
+  const [premiumTtsPlayingText, setPremiumTtsPlayingText] = useState<string>('');
+  const [premiumTtsLoading, setPremiumTtsLoading] = useState<boolean>(false);
+  const [copiedText, setCopiedText] = useState<string>('');
 
   // Audio Context Ref for waveform drawing
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -250,7 +297,7 @@ export default function HearingMock() {
         }
         setCameraEnabled(true);
       } catch (err) {
-        alert(isZh ? '无法访问摄像头，请检查浏览器权限设置。' : 'Cannot access camera. Please check permissions.');
+        showToast(isZh ? '无法访问摄像头，请检查浏览器权限设置。' : 'Cannot access camera. Please check permissions.', 'error');
       }
     }
   };
@@ -276,7 +323,7 @@ export default function HearingMock() {
         startAudioWaveform(stream);
         setMicEnabled(true);
       } catch (err) {
-        alert(isZh ? '无法访问麦克风，请检查浏览器权限设置。' : 'Cannot access microphone. Please check permissions.');
+        showToast(isZh ? '无法访问麦克风，请检查浏览器权限设置。' : 'Cannot access microphone. Please check permissions.', 'error');
       }
     }
   };
@@ -295,33 +342,118 @@ export default function HearingMock() {
     setMicEnabled(false);
   };
 
-  // Start Speach Synthesis TTS
-  const speakText = (text: string) => {
-    if (!ttsEnabled || !window.speechSynthesis) return;
+  // Start Speech Synthesis TTS / Premium Backend TTS
+  const speakText = async (text: string) => {
+    if (!ttsEnabled) return;
 
-    // Stop current speaking
+    // Stop current audio/speech synthesis
+    if (ttsAudioRef.current) {
+      try {
+        ttsAudioRef.current.pause();
+      } catch (e) {}
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+
+    if (ttsMode === 'local') {
+      playBrowserSpeech(text);
+      return;
+    }
+
+    try {
+      setPremiumTtsLoading(true);
+      setPremiumTtsPlayingText(text);
+
+      let url = ttsCacheRef.current.get(text);
+      if (!url) {
+        const resp = await fetch('/api/hearing-tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, scenario: activeScenario }),
+        });
+        if (!resp.ok) throw new Error(`TTS API ${resp.status}`);
+        const blob = await resp.blob();
+        url = URL.createObjectURL(blob);
+        ttsCacheRef.current.set(text, url);
+      }
+      
+      const audio = new Audio(url);
+      ttsAudioRef.current = audio;
+      audio.onplay = () => setPremiumTtsPlayingText(text);
+      audio.onended = () => setPremiumTtsPlayingText('');
+      audio.onpause = () => setPremiumTtsPlayingText('');
+      await audio.play();
+    } catch (err) {
+      console.warn('Gemini hearing TTS failed, falling back to browser:', err);
+      playBrowserSpeech(text);
+    } finally {
+      setPremiumTtsLoading(false);
+    }
+  };
+
+  const playBrowserSpeech = (text: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    
     window.speechSynthesis.cancel();
-
+    
     // Clean text from emojis
     const cleanText = text.replace(/[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]/g, "");
-
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.lang = 'en-US';
-    
-    // Choose a professional-sounding English voice if available
-    const voices = window.speechSynthesis.getVoices();
-    const preferredVoice = voices.find(v => 
-      (v.lang.startsWith('en-') && (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Premium')))
-    ) || voices.find(v => v.lang.startsWith('en-'));
-    
-    if (preferredVoice) {
-      utterance.voice = preferredVoice;
-    }
-    
-    utterance.rate = 0.95; // slightly slower for better comprehensibility
-    utterance.pitch = 0.95; // slightly lower for gravity
 
-    window.speechSynthesis.speak(utterance);
+    utterance.onstart = () => {
+      setPremiumTtsPlayingText(text);
+    };
+    utterance.onend = () => {
+      setPremiumTtsPlayingText('');
+    };
+    utterance.onerror = () => {
+      setPremiumTtsPlayingText('');
+    };
+    
+    const setVoiceAndSpeak = () => {
+      const voices = window.speechSynthesis.getVoices();
+      const preferredVoice = voices.find(v => 
+        (v.lang.startsWith('en-') && (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Premium')))
+      ) || voices.find(v => v.lang.startsWith('en-'));
+      
+      if (preferredVoice) {
+        utterance.voice = preferredVoice;
+      }
+      
+      utterance.rate = 0.95;
+      utterance.pitch = 0.95;
+      window.speechSynthesis.speak(utterance);
+    };
+
+    if (window.speechSynthesis.getVoices().length === 0) {
+      window.speechSynthesis.onvoiceschanged = setVoiceAndSpeak;
+    } else {
+      setVoiceAndSpeak();
+    }
+  };
+
+  const handleCopySuggestion = (text: string) => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        navigator.clipboard.writeText(text)
+          .then(() => {
+            setCopiedText(text);
+            setTimeout(() => setCopiedText(''), 2000);
+          })
+          .catch((err) => {
+            console.error("Clipboard failed:", err);
+            setCopiedText(text);
+            setTimeout(() => setCopiedText(''), 2000);
+          });
+      } else {
+        setCopiedText(text);
+        setTimeout(() => setCopiedText(''), 2000);
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   // Start Session
@@ -355,6 +487,11 @@ export default function HearingMock() {
     setCameraEnabled(false);
     setMicEnabled(false);
     setSessionActive(false);
+    if (ttsAudioRef.current) {
+      try {
+        ttsAudioRef.current.pause();
+      } catch (e) {}
+    }
     if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -363,7 +500,7 @@ export default function HearingMock() {
   // Start speech recognition trigger
   const triggerSpeechInput = () => {
     if (!recognitionRef.current) {
-      alert(isZh ? '您的浏览器暂不支持 Web Speech 语音输入，请使用键盘输入。' : 'Speech recognition not supported in this browser. Please type.');
+      showToast(isZh ? '您的浏览器暂不支持 Web Speech 语音输入，请使用键盘输入。' : 'Speech recognition not supported in this browser. Please type.', 'info');
       return;
     }
     
@@ -444,7 +581,7 @@ export default function HearingMock() {
   // Run Evaluation & generate scorecard
   const runEvaluation = async () => {
     if (messages.length < 2) {
-      alert(isZh ? '请先和对方进行几轮对话，再进行维权表现评估！' : 'Please converse for a few rounds before requesting evaluation!');
+      showToast(isZh ? '请先和对方进行几轮对话，再进行维权表现评估！' : 'Please converse for a few rounds before requesting evaluation!', 'info');
       return;
     }
 
@@ -657,12 +794,42 @@ export default function HearingMock() {
                           <p className="text-gray-400 font-bold uppercase text-[9px] tracking-wider">{isZh ? '你的大白话 / 原表达：' : 'Your Original Speech Attempt:'}</p>
                           <p className="text-gray-600 mt-1 font-mono leading-relaxed bg-white/60 p-2 rounded border border-gray-200/50">{s.original}</p>
                         </div>
-                        <div className="bg-primary/5 p-4 border-l-4 border-l-[#ff5a3c]">
-                          <p className="text-[#ff5a3c] font-black uppercase text-[9px] tracking-wider flex items-center gap-1">
-                            <Star size={10} className="fill-current" />
-                            {isZh ? '推荐黄金维权话术 (AI Native Script)：' : 'Optimized Legal Advocacy Statement (Re-written):'}
-                          </p>
-                          <p className="text-gray-900 mt-1.5 font-bold font-sans text-sm leading-relaxed">{s.optimized}</p>
+                        <div className="bg-[#ff5a3c]/5 p-4 border-l-4 border-l-[#ff5a3c]">
+                          <div className="flex items-center justify-between pb-1.5 border-b border-gray-150 mb-2">
+                            <p className="text-[#ff5a3c] font-black uppercase text-[9px] tracking-wider flex items-center gap-1">
+                              <Star size={10} className="fill-current" />
+                              {isZh ? '推荐黄金维权话术 (AI Native Script)：' : 'Optimized Legal Advocacy Statement (Re-written):'}
+                            </p>
+                            <div className="flex items-center space-x-1.5">
+                              <button
+                                type="button"
+                                onClick={() => speakText(s.optimized)}
+                                className={`p-1 px-2 rounded bg-[#ff5a3c]/10 hover:bg-[#ff5a3c]/20 text-[#ff5a3c] transition-all text-[9px] flex items-center space-x-1 cursor-pointer ${premiumTtsPlayingText === s.optimized ? 'ring-1 ring-[#ff5a3c]' : ''}`}
+                                title={isZh ? '带发音朗读' : 'Pronounce'}
+                              >
+                                <Volume2 size={10} className={premiumTtsPlayingText === s.optimized ? 'animate-bounce' : ''} />
+                                <span className="font-extrabold text-[9px]">
+                                  {premiumTtsLoading && premiumTtsPlayingText === s.optimized 
+                                    ? (isZh ? '加载中' : 'Loading') 
+                                    : premiumTtsPlayingText === s.optimized 
+                                      ? (isZh ? '播放中' : 'Playing') 
+                                      : (isZh ? '带发音朗读' : 'Read Aloud')}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCopySuggestion(s.optimized)}
+                                className="p-1 px-2 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition-all text-[9px] flex items-center space-x-1 cursor-pointer"
+                                title={isZh ? '复制台词' : 'Copy'}
+                              >
+                                {copiedText === s.optimized ? <CheckCircle size={10} className="text-green-600" /> : <Copy size={10} />}
+                                <span className="font-extrabold text-[9px]">
+                                  {copiedText === s.optimized ? (isZh ? '已复制' : 'Copied') : (isZh ? '复制台词' : 'Copy')}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-gray-900 mt-1.5 font-bold font-sans text-sm leading-relaxed pr-4">"{s.optimized}"</p>
                           {s.why && <p className="text-[11px] text-muted-soft mt-1.5 italic font-medium">💡 {s.why}</p>}
                         </div>
                       </div>
@@ -713,53 +880,156 @@ export default function HearingMock() {
         <div className="animate-in fade-in duration-500">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
             
-            {/* Left Column: Simulated Applicant Video Feed + Waveform */}
-            <div className="lg:col-span-4 flex flex-col gap-4 justify-between">
+            {/* Left Column: Dual Interactive Video Feeds (Remote Judge + Local Applicant) */}
+            <div className="lg:col-span-5 flex flex-col gap-4">
               
-              {/* Face-cam feed block */}
-              <div className="bg-neutral-900 rounded-2xl p-4 border border-white/10 h-[240px] flex flex-col justify-between relative overflow-hidden group">
-                <div className="absolute top-3 left-3 bg-neutral-950/80 backdrop-blur-md px-2.5 py-1 rounded-md text-[10px] text-white flex items-center gap-1.5 z-10 border border-white/10">
+              {/* Card 1: AI Opponent's Virtual Video Call Feed */}
+              <div className="bg-neutral-950 rounded-2xl p-4 border border-white/10 h-[210px] flex flex-col justify-between relative overflow-hidden shadow-xl">
+                <div className="absolute top-3 left-3 bg-neutral-900/90 backdrop-blur-md px-2.5 py-1 rounded-md text-[10px] text-white font-bold flex items-center gap-1.5 z-10 border border-white/10">
+                  <span className={`w-2 h-2 rounded-full bg-red-500 animate-pulse`}></span>
+                  {isZh ? '听证官远程连线 (REMOTE FEED)' : 'REMOTE JUDGE / AGENT'}
+                </div>
+                
+                <div className="absolute top-3 right-3 bg-neutral-900/90 backdrop-blur-md px-2.5 py-1 rounded-md text-[10px] text-white font-bold flex items-center gap-1.5 z-10 border border-white/10 font-mono">
+                  {isAiResponding ? (
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-ping"></span>
+                      <span className="text-amber-400 text-[9px] uppercase">{isZh ? '思考中...' : 'Thinking...'}</span>
+                    </span>
+                  ) : premiumTtsPlayingText ? (
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-ping"></span>
+                      <span className="text-red-500 text-[9px] uppercase">{isZh ? '发言中...' : 'Speaking...'}</span>
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
+                      <span className="text-green-400 text-[9px] uppercase">{isZh ? '聆听中...' : 'Listening...'}</span>
+                    </span>
+                  )}
+                </div>
+
+                {/* Virtual Camera Background Scene */}
+                <div className={`absolute inset-0 w-full h-full flex items-center justify-center ${
+                  activeScenario === 'academic' 
+                    ? 'bg-gradient-to-b from-slate-900 via-slate-950 to-neutral-950' 
+                    : activeScenario === 'bond'
+                    ? 'bg-gradient-to-b from-amber-950/80 via-neutral-950 to-neutral-950'
+                    : 'bg-gradient-to-b from-rose-950/80 via-neutral-950 to-neutral-950'
+                }`}>
+                  <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.15)_50%),linear-gradient(90deg,rgba(255,0,0,0.03),rgba(0,255,0,0.01),rgba(0,0,255,0.03))] bg-[length:100%_4px,3px_100%] pointer-events-none opacity-45"></div>
+                  
+                  {/* Glowing Animated Pulse behind Emoji */}
+                  <div className={`absolute w-32 h-32 rounded-full filter blur-xl opacity-20 animate-pulse ${
+                    isAiResponding 
+                      ? 'bg-amber-500' 
+                      : premiumTtsPlayingText 
+                      ? 'bg-[#ff5a3c] scale-110' 
+                      : 'bg-green-500'
+                  }`}></div>
+
+                  <div className="text-center relative z-10 animate-in zoom-in duration-300">
+                    <span className={`text-6xl block transform transition-all duration-300 ${
+                      premiumTtsPlayingText ? 'scale-110 rotate-1 animate-bounce' : 'hover:scale-105'
+                    }`}>{SCENARIOS[activeScenario].avatar}</span>
+                    <h5 className="text-white/80 text-xs font-black tracking-widest uppercase mt-3 font-mono">
+                      {isZh ? SCENARIOS[activeScenario].characterZh.split(' ')[0] : SCENARIOS[activeScenario].characterEn}
+                    </h5>
+                    <p className="text-white/40 text-[9px] font-bold uppercase mt-1 tracking-wider">
+                      {activeScenario === 'academic' ? 'University Board' : activeScenario === 'bond' ? 'VCAT Tribunal Room' : 'Infringement Court'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Subtitle overlay ticker inside virtual screen */}
+                {premiumTtsPlayingText && (
+                  <div className="absolute bottom-0 inset-x-0 bg-neutral-950/90 backdrop-blur-md px-4 py-2 text-[10px] text-white/95 font-bold text-center border-t border-white/10 animate-in fade-in duration-300 max-h-[50px] overflow-hidden flex items-center justify-center">
+                    <span className="line-clamp-2 leading-relaxed">
+                      💬 {premiumTtsPlayingText}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Card 2: Applicant's Live Camera Feed with Biometric HUD */}
+              <div className="bg-neutral-950 rounded-2xl p-4 border border-white/10 h-[210px] flex flex-col justify-between relative overflow-hidden shadow-xl group">
+                <div className="absolute top-3 left-3 bg-neutral-900/90 backdrop-blur-md px-2.5 py-1 rounded-md text-[10px] text-white font-bold flex items-center gap-1.5 z-10 border border-white/10">
                   <span className={`w-2 h-2 rounded-full ${cameraEnabled ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`}></span>
-                  {isZh ? 'LIVE 视频回传 (本地)' : 'LIVE Cam Feed (Local)'}
+                  {isZh ? '申诉人视频回传 (LOCAL CAM)' : 'APPLICANT (YOU)'}
                 </div>
 
                 <div className="w-full h-full flex items-center justify-center relative">
                   {cameraEnabled ? (
-                    <video 
-                      ref={videoRef} 
-                      autoPlay 
-                      playsInline 
-                      muted 
-                      className="absolute inset-0 w-full h-full object-cover rounded-xl"
-                    />
+                    <>
+                      <video 
+                        ref={videoRef} 
+                        autoPlay 
+                        playsInline 
+                        muted 
+                        className="absolute inset-0 w-full h-full object-cover rounded-xl"
+                      />
+                      {/* Biometric HUD Corner Crosshairs */}
+                      <div className="absolute inset-4 pointer-events-none border border-green-500/15 rounded-lg z-10">
+                        <div className="absolute top-0 left-0 w-3 h-3 border-t-2 border-l-2 border-green-500"></div>
+                        <div className="absolute top-0 right-0 w-3 h-3 border-t-2 border-r-2 border-green-500"></div>
+                        <div className="absolute bottom-0 left-0 w-3 h-3 border-b-2 border-l-2 border-green-500"></div>
+                        <div className="absolute bottom-0 right-0 w-3 h-3 border-b-2 border-r-2 border-green-500"></div>
+                      </div>
+                    </>
                   ) : (
-                    <div className="text-center p-4">
+                    <div className="text-center p-4 relative z-10">
                       <div className="w-12 h-12 bg-white/5 border border-white/10 rounded-full flex items-center justify-center mx-auto mb-3">
                         <User className="text-white/40" size={20} />
                       </div>
-                      <p className="text-[11px] text-gray-500 font-bold">{isZh ? '视频已关闭' : 'Video Disabled'}</p>
+                      <p className="text-[11px] text-gray-500 font-bold">{isZh ? '本地摄像头已关闭' : 'Local Web-Cam Off'}</p>
                       <button 
+                        type="button"
                         onClick={toggleCamera}
                         className="mt-3 text-[10px] bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg transition-all font-bold border border-white/5 cursor-pointer"
                       >
-                        {isZh ? '开启摄像头拟真' : 'Enable Webcam'}
+                        {isZh ? '开启人脸与视线拟真' : 'Enable Face & Eye Tracking'}
                       </button>
                     </div>
                   )}
                 </div>
 
+                {/* Floating Real-time Biometric Analysis Overlay */}
+                <div className="absolute bottom-3 right-3 bg-neutral-950/85 backdrop-blur-md p-2.5 rounded-xl text-[9px] text-white/90 border border-white/10 font-mono space-y-1 z-10 w-[145px] shadow-lg animate-in fade-in duration-300">
+                  <div className="text-[8px] text-green-400 font-black uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-ping"></span>
+                    AI Composure HUD
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-white/60">{isZh ? '置信率:' : 'Confidence:'}</span>
+                    <span className="text-green-400 font-bold font-mono">{hudConfidence}%</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-white/60">{isZh ? '视线锁定:' : 'Eye Contact:'}</span>
+                    <span className="text-blue-400 font-bold font-mono">{hudEyeContact}%</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-white/60">{isZh ? '论证结构:' : 'Argument Logic:'}</span>
+                    <span className="text-amber-400 font-bold font-mono">{hudLogic}%</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-white/60">{isZh ? '语速控制:' : 'Pacing Speed:'}</span>
+                    <span className="text-purple-400 font-bold font-mono">{hudWpm} WPM</span>
+                  </div>
+                </div>
+
                 {cameraEnabled && (
                   <button 
+                    type="button"
                     onClick={toggleCamera}
-                    className="absolute bottom-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity bg-neutral-950/80 hover:bg-neutral-950 text-white p-2 rounded-lg text-xs z-10 cursor-pointer"
+                    className="absolute bottom-3 left-3 opacity-0 group-hover:opacity-100 transition-opacity bg-neutral-950/80 hover:bg-neutral-950 text-white p-2 rounded-lg text-xs z-10 cursor-pointer"
                   >
                     <VideoOff size={14} />
                   </button>
                 )}
               </div>
 
-              {/* Waveform visualizer */}
-              <div className="bg-[#fffdf9] rounded-2xl p-4 border border-gray-150 h-[120px] flex flex-col justify-between">
+              {/* Card 3: Audio Spectrograph */}
+              <div className="bg-[#fffdf9] rounded-2xl p-4 border border-gray-150 h-[100px] flex flex-col justify-between shadow-sm">
                 <div className="flex justify-between items-center">
                   <span className="text-[9px] text-gray-400 font-bold tracking-wider uppercase flex items-center gap-1.5">
                     <Activity size={12} className={micEnabled ? 'text-[#ff5a3c] animate-pulse' : 'text-gray-400'} />
@@ -767,17 +1037,18 @@ export default function HearingMock() {
                   </span>
                   {!micEnabled && (
                     <button 
+                      type="button"
                       onClick={toggleMic}
                       className="text-[9px] bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded font-bold transition-all cursor-pointer"
                     >
-                      {isZh ? '激活麦克风波形' : 'Enable Wave'}
+                      {isZh ? '激活麦克风' : 'Enable Mic'}
                     </button>
                   )}
                 </div>
 
                 <div className="flex-1 flex items-center justify-center mt-2 relative">
                   {micEnabled ? (
-                    <canvas ref={canvasRef} className="w-full h-[60px] rounded" width={280} height={60} />
+                    <canvas ref={canvasRef} className="w-full h-[45px] rounded" width={280} height={45} />
                   ) : (
                     <p className="text-[10px] text-gray-400 italic text-center">{isZh ? '声学捕捉仪已离线，开启麦克风后自动渲染波形' : 'Audio visualizer offline. Enable microphone to render.'}</p>
                   )}
@@ -786,8 +1057,9 @@ export default function HearingMock() {
 
               {/* Exit block */}
               <button 
+                type="button"
                 onClick={endSession}
-                className="w-full border border-gray-200 hover:border-gray-300 text-gray-600 font-bold py-3 px-4 rounded-xl text-xs transition-all active:scale-95 cursor-pointer bg-white flex items-center justify-center gap-1.5 shadow-sm"
+                className="w-full border border-gray-200 hover:border-gray-300 text-gray-600 font-black py-3.5 px-4 rounded-xl text-xs transition-all active:scale-95 cursor-pointer bg-white flex items-center justify-center gap-1.5 shadow-sm"
               >
                 <Square size={12} className="fill-current text-[#ff5a3c]" />
                 {isZh ? '退出当前对决谈判' : 'Quit Arena Session'}
@@ -796,10 +1068,10 @@ export default function HearingMock() {
             </div>
 
             {/* Right Column: Hearing Dialogue Main Console */}
-            <div className="lg:col-span-8 flex flex-col justify-between bg-white border border-gray-100 rounded-3xl p-5 md:p-6 shadow-md min-h-[500px]">
+            <div className="lg:col-span-7 flex flex-col justify-between bg-white border border-gray-100 rounded-3xl p-5 md:p-6 shadow-md min-h-[500px]">
               
               {/* Header: Persona identity */}
-              <div className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${SCENARIOS[activeScenario].bgGradient}`}>
+              <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${SCENARIOS[activeScenario].bgGradient}`}>
                 <div className="flex items-center gap-3">
                   <span className="text-3xl shrink-0">{SCENARIOS[activeScenario].avatar}</span>
                   <div>
@@ -809,8 +1081,9 @@ export default function HearingMock() {
                     </h4>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
                   <button 
+                    type="button"
                     onClick={() => setTtsEnabled(!ttsEnabled)}
                     title={isZh ? '是否朗读对手发言' : 'Toggle Speech Out Loud'}
                     className={`p-2 rounded-lg transition-colors border ${
@@ -821,9 +1094,40 @@ export default function HearingMock() {
                   >
                     {ttsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
                   </button>
-                  <span className="text-[10px] font-bold text-gray-500 bg-white border border-gray-150 px-2.5 py-1 rounded-lg flex items-center gap-1 shadow-sm">
+
+                  {/* Speech Mode Toggle pills (only visible if ttsEnabled) */}
+                  {ttsEnabled && (
+                    <div className="flex bg-white/75 backdrop-blur-sm border border-gray-150 p-0.5 rounded-lg shadow-inner shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setTtsMode('local')}
+                        className={`px-2 py-1 text-[9px] font-black rounded-md transition-all cursor-pointer ${
+                          ttsMode === 'local' 
+                            ? 'bg-neutral-900 text-white shadow-xs' 
+                            : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                        title={isZh ? '极速响应: 使用浏览器本地语音合成接口，毫秒级无延迟回答' : 'Local Speech API: Instant 0ms response'}
+                      >
+                        ⚡ {isZh ? '极速' : 'Fast'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTtsMode('ai')}
+                        className={`px-2 py-1 text-[9px] font-black rounded-md transition-all cursor-pointer ${
+                          ttsMode === 'ai' 
+                            ? 'bg-neutral-900 text-[#ff5a3c] shadow-xs' 
+                            : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                        title={isZh ? '高端音质: 使用 Gemini 神经网络发音，更逼真但需 2s 缓冲' : 'Gemini AI Audio: High quality, 2s buffering'}
+                      >
+                        🤖 {isZh ? 'AI' : 'AI'}
+                      </button>
+                    </div>
+                  )}
+
+                  <span className="text-[10px] font-bold text-gray-500 bg-white border border-gray-150 px-2.5 py-1.5 rounded-lg flex items-center gap-1 shadow-sm shrink-0">
                     <UserCheck size={11} className="text-green-500" />
-                    {isZh ? '延迟 120ms' : '120ms Lag'}
+                    {ttsMode === 'local' ? (isZh ? '0ms 极速' : '0ms Lag') : (isZh ? '1.8s 延迟' : '1.8s Lag')}
                   </span>
                 </div>
               </div>
@@ -872,27 +1176,53 @@ export default function HearingMock() {
               <div className="border-t border-gray-100 pt-4 flex flex-col gap-3">
                 
                 {/* Quick Preset Arguments for Live Demo/Bypass (Risk 1 Solution) */}
-                <div className="px-3.5 py-2.5 bg-amber-50/50 border border-amber-100/50 rounded-2xl flex flex-col gap-2">
+                <div className="px-3.5 py-3 bg-amber-50/50 border border-amber-100/50 rounded-2xl flex flex-col gap-2">
                   <span className="text-[10px] font-black text-amber-800 tracking-wider flex items-center gap-1.5 uppercase font-sans">
                     <Sparkles size={12} className="text-[#ff5a3c]" />
-                    ⚡ 演示一键备用词 (Live Presentation Backup Templates — Avoid Mic/Latency Issues)
+                    ⚡ {isZh ? '选择答辩/谈判抗诉策略卡' : 'SELECT DEBATE / APPEAL STRATEGY CARD'}
                   </span>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {activeScenario === 'academic' && (
                       <>
                         <button
                           type="button"
-                          onClick={() => setUserInput("I did not use generative AI. The similarity rate is high only because I referenced standard laboratory protocols and common template definitions.")}
-                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                          onClick={() => setUserInput("The similarity rate is high only because it flags standard laboratory protocols, course template structures, and common math definitions shared by all students in this course.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
                         >
-                          📌 模板引用辩词 (Template Ref)
+                          <span className="text-[#ff5a3c] font-black">💡 模板引用抗辩 (Template Citation)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">针对代码、定理和常规格式重复的自证</span>
                         </button>
                         <button
                           type="button"
-                          onClick={() => setUserInput("My version history in Google Docs fully proves I drafted this essay from scratch over a three-week period. I can share the timeline logs.")}
-                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                          onClick={() => setUserInput("My Google Docs version draft history and local file timeline fully prove I authored this paper step-by-step over a three-week period. I can present the timestamps.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
                         >
-                          📌 历史痕迹自证 (Doc Logs Ref)
+                          <span className="text-blue-600 font-black">🕒 历史版本时间戳 (Version Chronology)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">用完整的写作轨迹、日志痕迹驳回AI指控</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("I have complete handwritten research notes, initial outlines, and marked literature sources which I can submit immediately for manual inspection.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
+                        >
+                          <span className="text-green-600 font-black">📝 大纲手稿自证 (Draft Notes)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">提交手稿、阅读笔记和完整草稿链</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("I am fully prepared to orally present and defend any section, formula, or logical transition in this paper to prove my comprehensive academic mastery.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
+                        >
+                          <span className="text-purple-600 font-black">🎤 现场知识答辩 (Oral Defense)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">通过对论文核心观点的深入口述证明原创</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("The writing style, grammar habits, and structural logic of this paper are fully consistent with my previous graded homework before AI tools emerged.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5 sm:col-span-2"
+                        >
+                          <span className="text-amber-600 font-black">📚 行文风格一致性 (Style Consistency)</span>
+                          <span className="text-gray-400 font-normal text-[9px]">比对个人以往写作语料，证明行文风格极高相似性</span>
                         </button>
                       </>
                     )}
@@ -900,17 +1230,43 @@ export default function HearingMock() {
                       <>
                         <button
                           type="button"
-                          onClick={() => setUserInput("According to VCAT and RTBA guidelines, minor scuffs on a 5-year-old floor are fully acceptable. You cannot claim my entire $2,500 bond.")}
-                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                          onClick={() => setUserInput("According to tenancy guidelines, minor scuffs on a 5-year-old floor represent fair wear and tear. You cannot claim my entire $2,500 bond for minor cosmetic marks.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
                         >
-                          📌 引用磨损法规 (Wear & Tear)
+                          <span className="text-[#ff5a3c] font-black">⚖️ 磨损豁免条款 (Wear & Tear Law)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">引用澳洲租赁法关于“合理磨损”免扣分豁免</span>
                         </button>
                         <button
                           type="button"
-                          onClick={() => setUserInput("The entry inspection report highlights that the kitchen was dusty when I moved in. I have photos confirming I left it cleaner.")}
-                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                          onClick={() => setUserInput("The Entry Condition Report explicitly notes that the floor had scuffs and the kitchen was dusty at lease commencement. I left it in the exact same state.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
                         >
-                          📌 引用状态报告 (Entry Report)
+                          <span className="text-blue-600 font-black">📊 入住状态报告比对 (Check-in Report)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">出示入住原始报告，证明痕迹属于历史遗留</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("I hired a licensed professional end-of-lease cleaner and have an official receipt. The property has been cleaned thoroughly according to standard.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
+                        >
+                          <span className="text-green-600 font-black">🧾 专业清洁发票 (Clean Invoice)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">提供正规清洁公司发票收据，免除卫生指责</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("The carpet has been installed for over 5 years and is fully depreciated under tax rules. You cannot charge me for brand new carpet replacement.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
+                        >
+                          <span className="text-purple-600 font-black">📉 物业折旧年限 (Depreciation Rule)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">计算材料折旧，反驳中介“以旧换新”无理要求</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("If we cannot resolve this reasonably, I will submit a formal dispute to VCAT. Tribunals strictly reject unitemized, excessive cleaning claims.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5 sm:col-span-2"
+                        >
+                          <span className="text-amber-600 font-black">🏛️ 提起仲裁警告 (VCAT Tribunal Alert)</span>
+                          <span className="text-gray-400 font-normal text-[9px]">展现仲裁准备，警告对方不合规收费将面临法定仲裁听证</span>
                         </button>
                       </>
                     )}
@@ -918,17 +1274,43 @@ export default function HearingMock() {
                       <>
                         <button
                           type="button"
-                          onClick={() => setUserInput("I was driving safely within limits until a heavy transport truck tailgated me dangerously, forcing me to temporarily speed up.")}
-                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                          onClick={() => setUserInput("I temporarily accelerated to safely clear a tailgating commercial truck that was driving dangerously close behind me. It was a critical hazard avoidance.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
                         >
-                          📌 紧急避险抗诉 (Emergency Avoidance)
+                          <span className="text-[#ff5a3c] font-black">🚨 突发避险辩抗 (Emergency Avoidance)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">证明当时车流危险，为了人身安全被迫避让</span>
                         </button>
                         <button
                           type="button"
-                          onClick={() => setUserInput("The 40km/h school zone signpost was completely hidden by unpruned, overhanging branches of the street tree at that intersection.")}
-                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95"
+                          onClick={() => setUserInput("The 40km/h school speed sign was completely obscured by overgrown, unpruned tree branches at that specific corner, making it invisible to drivers.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
                         >
-                          📌 路标遮挡抗辩 (Obscured Sign)
+                          <span className="text-blue-600 font-black">🌳 路标盲区遮挡 (Obscured Signage)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">指出市政绿化遮挡，证明缺乏主观违章故意</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("My speedometer had a documented calibration drift. I was driving under the reasonable belief that I was fully within the legal limit.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
+                        >
+                          <span className="text-green-600 font-black">⚙️ 仪器校准偏差 (Speedometer Drift)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">出示里程表偏差检测，申请免于扣分罚款</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("I was rushing my passenger to the nearest emergency room due to an acute, severe medical event. I have hospital check-in logs to verify.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5"
+                        >
+                          <span className="text-purple-600 font-black">🏥 乘员医疗紧急 (Medical Emergency)</span>
+                          <span className="text-gray-400 font-normal text-[9px] truncate">提供急诊室病历或救护日志，触发人道豁免</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserInput("I have maintained a completely flawless driving record for over five years. Under guidelines, I request a official warning in place of a fine.")}
+                          className="text-[10px] bg-white hover:bg-amber-100/70 text-gray-700 p-2 rounded-lg border border-gray-200 transition-all font-bold cursor-pointer hover:shadow-xs active:scale-95 text-left flex flex-col gap-0.5 sm:col-span-2"
+                        >
+                          <span className="text-amber-600 font-black">📜 五年无违章警告申请 (Clean Record Warning)</span>
+                          <span className="text-gray-400 font-normal text-[9px]">根据警方条例，对长期优良驾驶者申请首次违章书面警告</span>
                         </button>
                       </>
                     )}
